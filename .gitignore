@@ -19,12 +19,50 @@ lib/
 lib64/
 share/
 pyvenv.cfg
+__pypackages__/
 
 # Environment variables - never commit secrets
 .env
+.envrc
 
-# Logs (raw output files, not needed)
+# Logs
 *.log
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+*.spec
+*.manifest
+pip-log.txt
+pip-delete-this-directory.txt
+sdist/
+wheels/
+share/python-wheels/
+.installed.cfg
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+parts/
+var/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+*.py.cover
+.tox/
+.nox/
+.cache
+nosetests.xml
+coverage.xml
+.hypothesis/
+cover/
 
 # IDE
 .vscode/
@@ -38,21 +76,31 @@ pyvenv.cfg
 Thumbs.db
 desktop.ini
 
-# Python packaging
-dist/
-build/
-*.egg-info/
-*.egg
-
-# Test artifacts
-.pytest_cache/
-.coverage
-htmlcov/
-*.cover
-
 # Jupyter
-.ipynb_checkpoints/
+.ipynb_checkpoints
 *.ipynb
+
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# Other tools
+.pybuilder/
+target/
+cython_debug/
+.abstra/
+.spyderproject
+.spyproject
+.ropeproject
+.pdm-python
+.pdm-build/
+.pixi
+tempCodeRunnerFile.py
+.pypirc
 
 # Claude Code internal files
 .claude/
