@@ -1,0 +1,32 @@
+[
+  {
+    "timestamp": "2026-06-21T11:15:13.630474",
+    "tool_name": "document_reader",
+    "input": {
+      "doc_id": "INV-002"
+    },
+    "output": "{'found': True, 'doc_type': 'invoice'}"
+  },
+  {
+    "timestamp": "2026-06-21T11:15:55.619285",
+    "tool_name": "document_reader",
+    "input": {
+      "doc_id": "CLM-001"
+    },
+    "output": "{'found': True, 'doc_type': 'claim'}"
+  },
+  {
+    "timestamp": "2026-06-21T11:16:25.244113",
+    "tool_name": "document_statistics",
+    "input": {},
+    "output": "{'stats': {'total_documents': 5, 'documents_with_amounts': 4, 'total_amount': 466250.0, 'average_amount': 116562.5, 'document_types': {'invoice': 3, 'contract': 1, 'claim': 1}, 'min_amount': 2450.0, 'max_amount': 214500.0}}"
+  },
+  {
+    "timestamp": "2026-06-21T11:16:43.334567",
+    "tool_name": "document_reader",
+    "input": {
+      "doc_id": "CON-001"
+    },
+    "output": "{'found': True, 'doc_type': 'contract'}"
+  }
+]

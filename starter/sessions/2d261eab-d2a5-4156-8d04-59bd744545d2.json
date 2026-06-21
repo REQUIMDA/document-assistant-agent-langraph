@@ -1,0 +1,88 @@
+{
+  "session_id": "2d261eab-d2a5-4156-8d04-59bd744545d2",
+  "user_id": "demo_user",
+  "conversation_history": [
+    {
+      "user_input": "What is the total amount in invoice INV-001?",
+      "intent": {
+        "intent_type": "calculation",
+        "confidence": 0.95,
+        "reasoning": "The user is asking for a numerical result that involves arithmetic, specifically the total amount in an invoice, which falls under the calculation category."
+      },
+      "actions_taken": [
+        "classify_intent",
+        "calculation_agent",
+        "update_memory"
+      ],
+      "tools_used": [
+        "document_reader",
+        "calculator"
+      ],
+      "conversation_summary": "The user asked for the total amount in invoice INV-001. The invoice includes services rendered for consulting, software development, and support & maintenance, with a subtotal of $20,000 and a tax of $2,000. The total amount calculated is $22,000.",
+      "timestamp": "2026-06-21T11:08:00.776897"
+    },
+    {
+      "user_input": "Summarize all contracts in the system",
+      "intent": {
+        "intent_type": "summarization",
+        "confidence": 0.95,
+        "reasoning": "The user explicitly requested a summary of all contracts, which aligns with the 'summarization' category as it involves extracting key points from documents without performing calculations."
+      },
+      "actions_taken": [
+        "classify_intent",
+        "calculation_agent",
+        "update_memory",
+        "classify_intent",
+        "summarization_agent",
+        "update_memory"
+      ],
+      "tools_used": [
+        "document_reader",
+        "calculator",
+        "document_search",
+        "document_reader"
+      ],
+      "conversation_summary": "The system contains one contract document (ID: CON-001), which is a Service Agreement between DocDacity Solutions Inc. and Healthcare Partners LLC, dated January 1, 2024. The agreement includes services such as document processing platform access, 24/7 technical support, monthly data analytics reports, and compliance monitoring. The contract is valued at $180,000 over a 12-month period, with a monthly fee of $15,000. It includes a termination clause allowing either party to terminate with 60 days written notice.",
+      "timestamp": "2026-06-21T11:08:12.350179"
+    },
+    {
+      "user_input": "What is the combined total of all invoices?",
+      "intent": {
+        "intent_type": "calculation",
+        "confidence": 0.95,
+        "reasoning": "The user is asking for the combined total of all invoices, which requires arithmetic to sum up the amounts from multiple documents, fitting the 'calculation' category."
+      },
+      "actions_taken": [
+        "classify_intent",
+        "calculation_agent",
+        "update_memory",
+        "classify_intent",
+        "summarization_agent",
+        "update_memory",
+        "classify_intent",
+        "calculation_agent",
+        "update_memory"
+      ],
+      "tools_used": [
+        "document_reader",
+        "calculator",
+        "document_search",
+        "document_reader",
+        "document_search",
+        "document_reader",
+        "document_reader",
+        "calculator"
+      ],
+      "conversation_summary": "The combined total of all invoices is $305,800. This total is derived from the following invoices:\n- **INV-001:** $22,000\n- **INV-002:** $69,300\n- **INV-003:** $214,500",
+      "timestamp": "2026-06-21T11:08:24.547499"
+    }
+  ],
+  "document_context": [
+    "INV-002",
+    "INV-003",
+    "CON-001",
+    "INV-001"
+  ],
+  "created_at": "2026-06-21T11:07:49.028558",
+  "last_updated": "2026-06-21T11:08:24.547499"
+}
