@@ -1,5 +1,7 @@
 # Document Assistant — starter/
 
+**Live Demo: [docdacity.streamlit.app](https://docdacity.streamlit.app)**
+
 This directory contains all runnable code for the Document Assistant Agent.
 
 ## Quick Start

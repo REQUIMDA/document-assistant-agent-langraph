@@ -1,10 +1,8 @@
 # Document Assistant Agent
 
+**Live Demo: [docdacity.streamlit.app](https://docdacity.streamlit.app)**
+
 A production-grade multi-agent document assistant built with LangGraph, LangChain, ChromaDB, and Gemini 3.5 Flash. Upload financial or healthcare documents and ask questions, get summaries, or run calculations — all through a live Streamlit web app with full multi-user session isolation.
-
-## Live Demo
-
-Deploy on [Streamlit Cloud](https://share.streamlit.io) — see deployment instructions below.
 
 ## Features
 
