@@ -1,3 +1,4 @@
+import os
 from typing import TypedDict, Annotated, List, Dict, Any, Optional, Literal
 
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, MessagesPlaceholder
@@ -9,12 +10,10 @@ from langgraph.prebuilt import create_react_agent, tools_condition, ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage
 import re
 import operator
-from schemas import (
-    UserIntent, SessionState,
-    AnswerResponse, SummarizationResponse, CalculationResponse, UpdateMemoryResponse
-)
+from schemas import UserIntent, UpdateMemoryResponse
 from prompts import get_intent_classification_prompt, get_chat_prompt_template, MEMORY_SUMMARY_PROMPT
-from langgraph.checkpoint.memory import InMemorySaver
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 # TODO: The AgentState class is already implemented for you.  Study the
 # structure to understand how state flows through the LangGraph
@@ -48,148 +47,138 @@ class AgentState(TypedDict):
     actions_taken: Annotated[List[str], operator.add]
 
 
-def invoke_react_agent(response_schema: type[BaseModel], messages: List[BaseMessage], llm, tools) -> (
-Dict[str, Any], List[str]):
-    llm_with_tools = llm.bind_tools(
-        tools
-    )
+# Keyed by (id(llm), id(tools)) — tools id changes when documents are uploaded,
+# ensuring the cached agent always reflects the current retriever state.
+# Capped at 8 entries to prevent unbounded growth across uploads.
+_AGENT_CACHE: Dict[tuple, Any] = {}
+_AGENT_CACHE_MAX = 8
 
-    agent = create_react_agent(
-        model=llm_with_tools,  # Use the bound model
-        tools=tools,
-        response_format=response_schema,
-    )
 
-    result = agent.invoke({"messages": messages})
-    tools_used = [t.name for t in result.get("messages", []) if isinstance(t, ToolMessage)]
+def _get_react_agent(llm, tools):
+    key = (id(llm), id(tools))
+    if key not in _AGENT_CACHE:
+        if len(_AGENT_CACHE) >= _AGENT_CACHE_MAX:
+            _AGENT_CACHE.pop(next(iter(_AGENT_CACHE)))
+        _AGENT_CACHE[key] = create_react_agent(model=llm, tools=tools)
+    return _AGENT_CACHE[key]
 
+
+def _trim_history(messages: List[BaseMessage], max_messages: int = 6) -> List[BaseMessage]:
+    """Keep only the most recent N messages to prevent unbounded prompt growth."""
+    return messages[-max_messages:] if len(messages) > max_messages else messages
+
+
+def _run_react(agent, messages: List[BaseMessage]) -> tuple:
+    result = agent.invoke({"messages": messages}, {"recursion_limit": 6})
+    tools_used = [t.name for t in result.get("messages", []) if isinstance(t, ToolMessage) and t.name]
     return result, tools_used
 
 
-# TODO: Implement the classify_intent function.
-# This function should classify the user's intent and set the next step in the workflow.
-# Refer to README.md Task 2.2
+_SUMMARIZE_KEYWORDS = {"summarize", "summary", "summarise", "brief", "overview", "tldr", "outline"}
+_CALC_KEYWORDS = {"total", "sum", "calculate", "how much", "average", "how many", "tally", "grand total", "add up"}
+
+
+def _fast_classify(user_input: str) -> Optional[str]:
+    """Keyword-based fast path — returns intent_type or None to fall through to LLM."""
+    text = user_input.lower()
+    words = set(text.split())
+    if words & _SUMMARIZE_KEYWORDS:
+        return "summarization"
+    if any(kw in text for kw in _CALC_KEYWORDS):
+        return "calculation"
+    return None
+
+
 def classify_intent(state: AgentState, config: RunnableConfig) -> AgentState:
     """
     Classify user intent and update next_step. Also records that this
     function executed by appending "classify_intent" to actions_taken.
     """
+    user_input = state.get("user_input", "")
+
+    # Fast keyword path — skips a Gemini call for obvious intents
+    fast = _fast_classify(user_input)
+    if fast:
+        intent = UserIntent(intent_type=fast, confidence=0.9, reasoning="keyword match")
+        return {
+            "actions_taken": ["classify_intent"],
+            "intent": intent,
+            "next_step": f"{fast}_agent",
+        }
 
     llm = config.get("configurable").get("llm")
     history = state.get("messages", [])
-
     structured_llm = llm.with_structured_output(UserIntent)
 
+    def _msg_text(content):
+        if isinstance(content, list):
+            return " ".join(b["text"] if isinstance(b, dict) and "text" in b else str(b) for b in content)
+        return str(content) if content else ""
+
     prompt = get_intent_classification_prompt().format(
-        user_input=state.get("user_input", ""),
+        user_input=user_input,
         conversation_history="\n".join(
-            [msg.content for msg in history if hasattr(msg, "content")]
+            [_msg_text(msg.content) for msg in history if hasattr(msg, "content")]
         )
     )
 
     intent = structured_llm.invoke(prompt)
-
-    if intent.intent_type == "qa":
-        next_step = "qa_agent"
-
-    elif intent.intent_type == "summarization":
-        next_step = "summarization_agent"
-
-    elif intent.intent_type == "calculation":
-        next_step = "calculation_agent"
-
-    else:
-        next_step = "qa_agent"
+    intent_type = intent.intent_type if intent.intent_type in ("qa", "summarization", "calculation") else "qa"
 
     return {
         "actions_taken": ["classify_intent"],
         "intent": intent,
-        "next_step": next_step,
+        "next_step": f"{intent_type}_agent",
     }
 
 def qa_agent(state: AgentState, config: RunnableConfig) -> AgentState:
-    """
-    Handle Q&A tasks and record the action.
-    """
     llm = config.get("configurable").get("llm")
     tools = config.get("configurable").get("tools")
-
-    prompt_template = get_chat_prompt_template("qa")
-
-    messages = prompt_template.invoke({
+    messages = get_chat_prompt_template("qa").invoke({
         "input": state["user_input"],
-        "chat_history": state.get("messages", []),
+        "chat_history": _trim_history(state.get("messages", [])),
     }).to_messages()
-
-    result, tools_used = invoke_react_agent(AnswerResponse, messages, llm, tools)
-
+    result, tools_used = _run_react(_get_react_agent(llm, tools), messages)
     return {
         "messages": result.get("messages", []),
         "actions_taken": ["qa_agent"],
         "current_response": result,
         "tools_used": tools_used,
-        "next_step": "update_memory",
+        "next_step": "update_memory" if tools_used else "end",
     }
 
 
 def summarization_agent(state: AgentState, config: RunnableConfig) -> AgentState:
-    """
-    Handle summarization tasks and record the action.
-    """
-
     llm = config.get("configurable").get("llm")
     tools = config.get("configurable").get("tools")
-
-    prompt_template = get_chat_prompt_template("summarization")
-
-    messages = prompt_template.invoke({
+    messages = get_chat_prompt_template("summarization").invoke({
         "input": state["user_input"],
-        "chat_history": state.get("messages", []),
+        "chat_history": _trim_history(state.get("messages", [])),
     }).to_messages()
-
-    result, tools_used = invoke_react_agent(
-        SummarizationResponse,
-        messages,
-        llm,
-        tools
-    )
-
+    result, tools_used = _run_react(_get_react_agent(llm, tools), messages)
     return {
         "messages": result.get("messages", []),
         "actions_taken": ["summarization_agent"],
         "current_response": result,
         "tools_used": tools_used,
-        "next_step": "update_memory",
+        "next_step": "update_memory" if tools_used else "end",
     }
 
-def calculation_agent(state: AgentState, config: RunnableConfig) -> AgentState:
-    """
-    Handle calculation tasks and record the action.
-    """
 
+def calculation_agent(state: AgentState, config: RunnableConfig) -> AgentState:
     llm = config.get("configurable").get("llm")
     tools = config.get("configurable").get("tools")
-
-    prompt_template = get_chat_prompt_template("calculation")
-
-    messages = prompt_template.invoke({
+    messages = get_chat_prompt_template("calculation").invoke({
         "input": state["user_input"],
-        "chat_history": state.get("messages", []),
+        "chat_history": _trim_history(state.get("messages", [])),
     }).to_messages()
-
-    result, tools_used = invoke_react_agent(
-        CalculationResponse,
-        messages,
-        llm,
-        tools
-    )
-
+    result, tools_used = _run_react(_get_react_agent(llm, tools), messages)
     return {
         "messages": result.get("messages", []),
         "actions_taken": ["calculation_agent"],
         "current_response": result,
         "tools_used": tools_used,
-        "next_step": "update_memory",
+        "next_step": "update_memory" if tools_used else "end",
     }
 
 
@@ -207,12 +196,10 @@ def update_memory(state: AgentState,config: RunnableConfig) -> AgentState:
         ),
         MessagesPlaceholder("chat_history"),
     ]).invoke({
-        "chat_history": state.get("messages", []),
+        "chat_history": _trim_history(state.get("messages", [])),
     })
 
-    structured_llm = llm.with_structured_output(
-        UpdateMemoryResponse
-    )
+    structured_llm = llm.with_structured_output(UpdateMemoryResponse)
 
     response = structured_llm.invoke(prompt_with_history)
 
@@ -256,12 +243,16 @@ def create_workflow(llm, tools):
         }
     )
 
-    workflow.add_edge("qa_agent", "update_memory")
-    workflow.add_edge("summarization_agent", "update_memory")
-    workflow.add_edge("calculation_agent", "update_memory")
+    for node in ("qa_agent", "summarization_agent", "calculation_agent"):
+        workflow.add_conditional_edges(node, should_continue, {
+            "update_memory": "update_memory",
+            "end": END,
+        })
 
     workflow.add_edge("update_memory", END)
 
-    return workflow.compile(
-        checkpointer=InMemorySaver()
-    )
+    db_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints.sqlite")
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    checkpointer = SqliteSaver(conn)
+    return workflow.compile(checkpointer=checkpointer)

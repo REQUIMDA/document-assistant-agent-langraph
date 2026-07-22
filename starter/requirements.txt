@@ -8,3 +8,20 @@ pydantic>=2.0.0
 python-dotenv>=1.0.0
 openai>=1.0.0
 print-color>=0.4.6
+
+# Gemini LLM + Embeddings
+langchain-google-genai>=1.0.0
+
+# Vector Store
+chromadb>=0.4.20
+langchain-chroma>=0.1.0
+
+# Persistent Checkpointing
+langgraph-checkpoint-sqlite>=1.0.0
+
+# Document Ingestion
+pypdf>=4.0.0
+python-docx>=1.1.0
+
+# Streamlit Web UI
+streamlit>=1.30.0

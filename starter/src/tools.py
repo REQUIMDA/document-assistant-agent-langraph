@@ -95,7 +95,29 @@ def create_calculator_tool(logger: ToolLogger):
 
                 return error_msg
 
-            result = eval(expression)
+            import ast
+
+            def _safe_eval(node):
+                if isinstance(node, ast.Expression):
+                    return _safe_eval(node.body)
+                elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                    return node.value
+                elif isinstance(node, ast.BinOp):
+                    ops = {
+                        ast.Add: lambda a, b: a + b,
+                        ast.Sub: lambda a, b: a - b,
+                        ast.Mult: lambda a, b: a * b,
+                        ast.Div: lambda a, b: a / b,
+                    }
+                    if type(node.op) not in ops:
+                        raise ValueError("Unsupported operator")
+                    return ops[type(node.op)](_safe_eval(node.left), _safe_eval(node.right))
+                elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+                    return -_safe_eval(node.operand)
+                else:
+                    raise ValueError("Unsupported expression type")
+
+            result = _safe_eval(ast.parse(expression, mode="eval"))
 
             logger.log_tool_use(
                 "calculator",
@@ -161,7 +183,7 @@ def create_document_search_tool(retriever, logger: ToolLogger):
             if search_type == "all":
                 results = retriever.retrieve_all()
 
-            if search_type == "keyword":
+            elif search_type == "keyword":
                 results = retriever.retrieve_by_keyword(query)
 
             elif search_type == "type" and doc_type:
@@ -209,11 +231,12 @@ def create_document_search_tool(retriever, logger: ToolLogger):
                     formatted += f"Type: {chunk.metadata.get('doc_type', 'Unknown')}\n"
 
                     # Include amount information if available
-                    amount_value = None
                     for field in ['total', 'amount', 'value']:
                         if field in chunk.metadata:
-                            amount_value = chunk.metadata[field]
-                            formatted += f"Amount: ${amount_value:,.2f}\n"
+                            try:
+                                formatted += f"Amount: ${float(chunk.metadata[field]):,.2f}\n"
+                            except (ValueError, TypeError):
+                                formatted += f"Amount: {chunk.metadata[field]}\n"
                             break
 
                     if hasattr(chunk, 'relevance_score'):
@@ -298,7 +321,10 @@ def create_document_reader_tool(retriever, logger: ToolLogger):
                 amount_info = ""
                 for field in ['total', 'amount', 'value']:
                     if field in doc.metadata:
-                        amount_info = f"\nAmount: ${doc.metadata[field]:,.2f}"
+                        try:
+                            amount_info = f"\nAmount: ${float(doc.metadata[field]):,.2f}"
+                        except (ValueError, TypeError):
+                            amount_info = f"\nAmount: {doc.metadata[field]}"
                         break
 
                 result = f"Document {doc_id}:{amount_info}\n\n{doc.content}"

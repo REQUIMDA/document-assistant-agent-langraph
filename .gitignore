@@ -104,3 +104,10 @@ tempCodeRunnerFile.py
 
 # Claude Code internal files
 .claude/
+
+# App-generated runtime files
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+starter/sessions/
+starter/logs/

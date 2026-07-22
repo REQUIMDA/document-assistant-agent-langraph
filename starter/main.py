@@ -40,12 +40,13 @@ def list_documents(assistant: DocumentAssistant):
         print(f"ID: {doc_id}")
         print(f"Title: {doc.title}")
         print(f"Type: {doc.doc_type}")
-        if 'total' in doc.metadata:
-            print(f"Total: ${doc.metadata['total']:,.2f}")
-        elif 'amount' in doc.metadata:
-            print(f"Amount: ${doc.metadata['amount']:,.2f}")
-        elif 'value' in doc.metadata:
-            print(f"Value: ${doc.metadata['value']:,.2f}")
+        for field in ('total', 'amount', 'value'):
+            if field in doc.metadata:
+                try:
+                    print(f"{field.capitalize()}: ${float(doc.metadata[field]):,.2f}")
+                except (ValueError, TypeError):
+                    print(f"{field.capitalize()}: {doc.metadata[field]}")
+                break
         print("-" * 40)
 
 
@@ -68,7 +69,6 @@ def main():
     print(" INITIALIZING ASSISTANT...", color='green')
     assistant = DocumentAssistant(
         openai_api_key=api_key,
-        model_name="gpt-4o",
         temperature=0.1
     )
 

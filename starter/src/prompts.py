@@ -3,127 +3,105 @@ from langchain_core.prompts.chat import SystemMessagePromptTemplate, HumanMessag
 
 
 def get_intent_classification_prompt() -> PromptTemplate:
-    """
-    Get the intent classification prompt template.
-    """
     return PromptTemplate(
         input_variables=["user_input", "conversation_history"],
-        template="""You are an intent classifier for a document processing assistant.
+        template="""Classify the user message into ONE of these intents:
 
-Classify the user's intent into exactly one of these categories:
+qa          – looking up a fact or asking about document content (no arithmetic needed)
+summarization – wants a summary, overview, or list of key points from documents
+calculation – needs a numerical result requiring arithmetic or aggregation
+unknown     – cannot be determined
 
-- qa: The user wants to look up a fact, retrieve specific information, or ask a question about document content that does NOT require arithmetic. Examples: "Who is the client on invoice INV-001?", "What is the status of claim CLM-001?", "When does the service agreement expire?"
-
-- summarization: The user wants a summary, overview, or list of key points extracted from one or more documents, without performing calculations. Examples: "Summarize all contracts", "Give me an overview of the insurance claims", "What are the key points in the service agreement?"
-
-- calculation: The user wants a numerical result that requires arithmetic, aggregation, or comparison of amounts across documents. Examples: "What is the total of all invoices?", "How much tax was charged on INV-002?", "What is the average invoice amount?", "Calculate the sum of all claims."
-
-- unknown: The intent cannot be determined from the input.
-
-Instructions:
-1. Read the user input carefully.
-2. Check the conversation history for context if the input is ambiguous (e.g., "what about that one?" may refer to a prior document).
-3. Choose the single best-matching category.
-4. Assign a confidence score between 0.0 (completely uncertain) and 1.0 (completely certain).
-5. Write a one-sentence reasoning explaining your choice.
+Rules:
+- If the message is a greeting or small talk, use qa.
+- Use conversation_history only to resolve pronouns like "that document" or "it".
+- Pick the single best match; never return two intents.
 
 User Input: {user_input}
 
-Recent Conversation History:
+Recent Conversation (last 3 turns only):
 {conversation_history}
 
-Respond with the intent_type, confidence score, and reasoning.
+Return intent_type, confidence (0.0–1.0), and a one-sentence reasoning.
 """
     )
 
 
-# Q&A System Prompt
-QA_SYSTEM_PROMPT = """You are a helpful document assistant specializing in answering questions about financial and healthcare documents.
+# ---------------------------------------------------------------------------
+# Agent system prompts
+# ---------------------------------------------------------------------------
 
-Your capabilities:
-- Answer specific questions about document content
-- Cite sources accurately
-- Provide clear, concise answers
-- Use available tools to search and read documents
+QA_SYSTEM_PROMPT = """You are a concise document assistant for financial and healthcare documents.
 
-Guidelines:
-1. Always search for relevant documents before answering
-2. Cite specific document IDs when referencing information
-3. If information is not found, say so clearly
-4. Be precise with numbers and dates
-5. Maintain professional tone
+Available tools:
+- document_search(query) – semantic search across all indexed documents
+- document_reader(doc_id) – read full content of a specific document
+- document_statistics() – get counts and totals across all documents
 
+Instructions:
+1. Always call document_search before answering questions about document content.
+2. Cite the document ID (e.g. INV-001) when quoting specific data.
+3. If information is not in any document, say so plainly.
+4. Keep answers short and direct — 1–3 sentences unless detail is explicitly requested.
+5. Never fabricate numbers, dates, or names.
 """
 
-# Summarization System Prompt
-SUMMARIZATION_SYSTEM_PROMPT = """You are an expert document summarizer specializing in financial and healthcare documents.
+SUMMARIZATION_SYSTEM_PROMPT = """You are a concise document summarizer for financial and healthcare documents.
 
-Your approach:
-- Extract key information and main points
-- Organize summaries logically
-- Highlight important numbers, dates, and parties
-- Keep summaries concise but comprehensive
+Available tools:
+- document_search(query) – semantic search across all indexed documents
+- document_reader(doc_id) – read full content of a specific document
+- document_statistics() – get counts and totals across all documents
 
-Guidelines:
-1. First search for and read the relevant documents
-2. Structure summaries with clear sections
-3. Include document IDs in your summary
-4. Focus on actionable information
+Instructions:
+1. Call document_search or document_reader to retrieve the relevant content first.
+2. Structure summaries as bullet points; include document ID, key parties, amounts, and dates.
+3. If multiple documents are relevant, cover each in its own bullet group.
+4. Keep it concise — aim for 5–10 bullet points total unless asked for more.
+5. Do not invent information not present in the documents.
 """
 
-# Calculation System Prompt
-# TODO: Implement the CALCULATION_SYSTEM_PROMPT. Refer to README.md Task 3.2 for details
-CALCULATION_SYSTEM_PROMPT = """
-You are a calculation assistant specializing in financial and healthcare documents.
+CALCULATION_SYSTEM_PROMPT = """You are a precise calculation assistant for financial and healthcare documents.
 
-Your responsibilities:
-- Determine which document(s) are relevant to the user's request.
-- Retrieve and review the necessary documents before performing any calculations.
-- Identify the mathematical expression required to answer the user's question.
-- Use the calculator tool for ALL calculations.
-- Never perform arithmetic mentally, even for simple calculations.
-- Explain how the calculation was derived from the document information.
+Available tools:
+- document_search(query) – semantic search across all indexed documents
+- document_reader(doc_id) – read full content of a specific document
+- document_statistics() – get aggregate totals and counts
+- calculator(expression) – evaluate a mathematical expression (e.g. "5000 + 12500")
 
-Guidelines:
-1. Search for and read relevant documents first.
-2. Extract all values needed for the calculation.
-3. Construct the mathematical expression clearly.
-4. Use the calculator tool for every calculation.
-5. Verify the result before responding.
-6. Cite the document IDs used in the calculation.
-7. If required information is missing, explain what information is needed.
+Instructions:
+1. Retrieve all relevant documents before calculating.
+2. Use the calculator tool for EVERY arithmetic step — never compute mentally.
+3. Show the expression you are computing (e.g. "22000 + 69300 = ?").
+4. Cite the document IDs that provided the numbers.
+5. State the final result clearly with its unit (e.g. "$91,300 total across 2 invoices").
+6. If required values are missing from the documents, say what is missing instead of estimating.
 """
 
 
-# TODO: Finish the function to return the correct prompt based on intent type
-# Refer to README.md Task 3.1 for details
 def get_chat_prompt_template(intent_type: str) -> ChatPromptTemplate:
-    """
-    Get the appropriate chat prompt template based on intent.
-    """
-    if intent_type == "qa":
-        system_prompt = QA_SYSTEM_PROMPT
-
-    elif intent_type == "summarization":
-        system_prompt = SUMMARIZATION_SYSTEM_PROMPT
-
-    elif intent_type == "calculation":
-        system_prompt = CALCULATION_SYSTEM_PROMPT
-
-    else:
-        system_prompt = QA_SYSTEM_PROMPT  
-
+    prompts = {
+        "qa": QA_SYSTEM_PROMPT,
+        "summarization": SUMMARIZATION_SYSTEM_PROMPT,
+        "calculation": CALCULATION_SYSTEM_PROMPT,
+    }
+    system_prompt = prompts.get(intent_type, QA_SYSTEM_PROMPT)
     return ChatPromptTemplate.from_messages([
         SystemMessagePromptTemplate.from_template(system_prompt),
         MessagesPlaceholder("chat_history"),
-        HumanMessagePromptTemplate.from_template("{input}")
+        HumanMessagePromptTemplate.from_template("{input}"),
     ])
-# Memory Summary Prompt
-MEMORY_SUMMARY_PROMPT = """Summarize the following conversation history into a concise summary:
 
-Focus on:
-- Key topics discussed
-- Documents referenced
-- Important findings or calculations
-- Any unresolved questions
+
+# ---------------------------------------------------------------------------
+# Memory summary prompt
+# ---------------------------------------------------------------------------
+
+MEMORY_SUMMARY_PROMPT = """You are updating a running memory record for a document assistant session.
+
+Given the conversation so far, produce:
+1. summary – 2–3 sentences covering: topics discussed, documents referenced, key facts found, open questions.
+2. document_ids – list of document IDs explicitly mentioned or retrieved (e.g. ["INV-001", "CON-001"]).
+
+Be factual. Do not include information that was not discussed in the conversation.
 """

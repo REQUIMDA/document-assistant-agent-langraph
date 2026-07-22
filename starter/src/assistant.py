@@ -5,127 +5,191 @@ from datetime import datetime
 import uuid
 
 from langchain_core.messages import BaseMessage
-from langchain_openai import ChatOpenAI
 
 from schemas import SessionState
-from retrieval import SimulatedRetriever
+from retrieval import ChromaRetriever
 from tools import get_all_tools, ToolLogger
 from agent import create_workflow, AgentState
-from prompts import MEMORY_SUMMARY_PROMPT
+
+
+def _build_llm(gemini_api_key: Optional[str], openai_api_key: Optional[str], temperature: float):
+    """Return Gemini LLM if key present, else fall back to OpenAI."""
+    if gemini_api_key:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(
+            model="gemini-3.5-flash",
+            google_api_key=gemini_api_key,
+            temperature=temperature,
+        ), "gemini"
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(
+        api_key=openai_api_key,
+        model="gpt-4o",
+        temperature=temperature,
+        base_url="https://openai.vocareum.com/v1",
+    ), "openai"
+
+
+def _build_embedding_model(gemini_api_key: Optional[str], openai_api_key: Optional[str]):
+    """Return Gemini embeddings if key present, else fall back to OpenAI."""
+    if gemini_api_key:
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+        return GoogleGenerativeAIEmbeddings(
+            model="gemini-embedding-2",
+            google_api_key=gemini_api_key,
+        )
+    from langchain_openai import OpenAIEmbeddings
+    return OpenAIEmbeddings(
+        model="text-embedding-3-large",
+        api_key=openai_api_key,
+    )
 
 
 class DocumentAssistant:
     """
-    The assistant creates and loads sessions and
-    stores state/session data within a file.
+    Orchestrates sessions, the LangGraph workflow, ChromaDB retrieval,
+    and Gemini (or OpenAI fallback) LLM + embeddings.
     """
 
     def __init__(
-            self,
-            openai_api_key: str,
-            model_name: str = "gpt-4o",
-            temperature: float = 0.1,
-            session_storage_path: str = "./sessions"
+        self,
+        openai_api_key: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
+        temperature: float = 0.1,
+        session_storage_path: str = "./sessions",
     ):
-        # Initialize LLM
-        self.llm = ChatOpenAI(
-            api_key=openai_api_key,
-            model=model_name,
-            temperature=temperature,
-            base_url="https://openai.vocareum.com/v1"
-        )
+        self.openai_api_key = openai_api_key
+        self.gemini_api_key = gemini_api_key
+        self.temperature = temperature
 
-        # Initialize components
-        self.retriever = SimulatedRetriever()
+        self.llm, self.llm_provider = _build_llm(gemini_api_key, openai_api_key, temperature)
+        self.embedding_model = _build_embedding_model(gemini_api_key, openai_api_key)
+
         self.logs_dir = "./logs"
-
-        # tool_logger and tools are re-created in start_session once the session_id is known
-        self.tool_logger = None
-        self.tools = None
-
-        # Create workflow (compiled with checkpointer inside create_workflow)
-        # Tools are injected per-request via config["configurable"]["tools"]
-        self.workflow = None
-
-        # Session management
         self.session_storage_path = session_storage_path
         os.makedirs(session_storage_path, exist_ok=True)
 
-        # Current session
+        # Set per start_session()
+        self.tool_logger: Optional[ToolLogger] = None
+        self.tools: Optional[List] = None
+        self.retriever: Optional[ChromaRetriever] = None
+        self.workflow = None
         self.current_session: Optional[SessionState] = None
 
+    # ------------------------------------------------------------------
+    # Session management
+    # ------------------------------------------------------------------
+
     def start_session(self, user_id: str, session_id: Optional[str] = None) -> str:
-        """Start a new session or resume an existing one."""
         if session_id and self._session_exists(session_id):
-            # Load existing session
             self.current_session = self._load_session(session_id)
             print(f"Resumed session {session_id}")
         else:
-            # Create new session
             session_id = session_id or str(uuid.uuid4())
             self.current_session = SessionState(
                 session_id=session_id,
                 user_id=user_id,
                 conversation_history=[],
-                document_context=[]
+                document_context=[],
             )
             print(f"Started new session {session_id}")
 
-        # Wire logger and tools to this session so logs go to logs/session_<id>.json
+        # Per-session ChromaDB collection — isolates each user's documents
+        self.retriever = ChromaRetriever(
+            embedding_model=self.embedding_model,
+            collection_name=f"docs_{session_id}",
+        )
+
         self.tool_logger = ToolLogger(logs_dir=self.logs_dir, session_id=session_id)
         self.tools = get_all_tools(self.retriever, self.tool_logger)
         self.workflow = create_workflow(self.llm, self.tools)
 
         return session_id
 
+    def get_ui_messages(self) -> list:
+        """Return conversation history as {role, content, meta} dicts for st.session_state.messages."""
+        if not self.current_session:
+            return []
+        messages = []
+        for turn in self.current_session.conversation_history:
+            user_input = turn.get("user_input", "")
+            assistant_response = turn.get("assistant_response", "")
+            if user_input:
+                messages.append({"role": "user", "content": user_input, "meta": {}})
+            if assistant_response:
+                messages.append({"role": "assistant", "content": assistant_response, "meta": {
+                    "intent": turn.get("intent"),
+                    "tools_used": turn.get("tools_used", []),
+                    "actions_taken": turn.get("actions_taken", []),
+                    "summary": turn.get("conversation_summary", ""),
+                }})
+        return messages
+
     def _session_exists(self, session_id: str) -> bool:
-        filepath = os.path.join(self.session_storage_path, f"{session_id}.json")
-        return os.path.exists(filepath)
+        return os.path.exists(
+            os.path.join(self.session_storage_path, f"{session_id}.json")
+        )
 
     def _load_session(self, session_id: str) -> SessionState:
         filepath = os.path.join(self.session_storage_path, f"{session_id}.json")
-        with open(filepath, 'r') as f:
+        with open(filepath, "r") as f:
             data = json.load(f)
         return SessionState(**data)
 
     def _save_session(self) -> None:
-        if self.current_session:
-            filepath = os.path.join(
-                self.session_storage_path,
-                f"{self.current_session.session_id}.json"
-            )
-            session_dict = self.current_session.dict()
+        if not self.current_session:
+            return
+        filepath = os.path.join(
+            self.session_storage_path,
+            f"{self.current_session.session_id}.json",
+        )
+        session_dict = self.current_session.dict()
 
-            def serialize_datetime(obj):
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                return obj
+        def _serialize(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return obj
 
-            with open(filepath, 'w') as f:
-                json.dump(session_dict, f, indent=2, default=serialize_datetime)
+        with open(filepath, "w") as f:
+            json.dump(session_dict, f, indent=2, default=_serialize)
+
+    # ------------------------------------------------------------------
+    # Document ingestion
+    # ------------------------------------------------------------------
+
+    def ingest_uploaded_document(self, filename: str, file_bytes: bytes) -> int:
+        """
+        Chunk, embed, and store an uploaded file in this session's ChromaDB collection.
+        Returns the number of chunks ingested.
+        """
+        if not self.retriever:
+            raise ValueError("No active session. Call start_session() first.")
+        return self.retriever.ingest_file(filename, file_bytes)
+
+    # ------------------------------------------------------------------
+    # State helpers
+    # ------------------------------------------------------------------
+
+    def _get_checkpoint_state(self, config) -> dict:
+        """Single SQLite read per turn — reused by both summary and history helpers."""
+        if not self.current_session or not self.current_session.conversation_history:
+            return {}
+        try:
+            return self.workflow.get_state(config).values
+        except Exception:
+            return {}
 
     def _get_conversation_summary(self, config) -> str:
-        if not self.current_session or not self.current_session.conversation_history:
-            return "No previous conversation."
-
-        current_state = self.workflow.get_state(config).values
-
-        summary = current_state.get("conversation_summary", [])
-        return summary
+        return self._get_checkpoint_state(config).get("conversation_summary", "No previous conversation.")
 
     def _get_conversation_history(self, config) -> List[BaseMessage]:
-        if not self.current_session or not self.current_session.conversation_history:
-            return []
+        return self._get_checkpoint_state(config).get("messages", [])
 
-        current_state = self.workflow.get_state(config).values
-
-        history = current_state.get("messages", [])
-        return history
-
+    # ------------------------------------------------------------------
+    # Message processing
+    # ------------------------------------------------------------------
 
     def process_message(self, user_input: str) -> Dict[str, Any]:
-        """Process a user message using the LangGraph workflow."""
-
         if not self.current_session:
             raise ValueError("No active session. Call start_session() first.")
 
@@ -148,16 +212,23 @@ class DocumentAssistant:
             "tools_used": [],
             "session_id": self.current_session.session_id,
             "user_id": self.current_session.user_id,
-            # Initialise actions_taken list for this turn
-            "actions_taken": []
+            "actions_taken": [],
         }
+
         try:
-            # Invoke the workflow with a thread_id equal to the session_id
             final_state = self.workflow.invoke(initial_state, config=config)
-            # Update session with new state
+
+            raw_content = final_state.get("messages")[-1].content if final_state.get("messages") else None
+            if isinstance(raw_content, list):
+                raw_content = "".join(
+                    b["text"] if isinstance(b, dict) and "text" in b else str(b)
+                    for b in raw_content
+                )
+
             if final_state.get("messages"):
                 self.current_session.conversation_history.append({
                     "user_input": user_input,
+                    "assistant_response": raw_content or "",
                     "intent": final_state.get("intent").dict() if final_state.get("intent") else None,
                     "actions_taken": final_state.get("actions_taken", []),
                     "tools_used": final_state.get("tools_used", []),
@@ -167,22 +238,25 @@ class DocumentAssistant:
                 self.current_session.last_updated = datetime.now()
                 if final_state.get("active_documents"):
                     self.current_session.document_context = list(set(
-                        self.current_session.document_context +
-                        final_state["active_documents"]
+                        self.current_session.document_context
+                        + final_state["active_documents"]
                     ))
                 self._save_session()
+
             return {
                 "success": True,
-                "response": final_state.get("messages")[-1].content if final_state.get("messages") else None,
+                "response": raw_content,
                 "intent": final_state.get("intent").dict() if final_state.get("intent") else None,
                 "tools_used": final_state.get("tools_used", []),
                 "sources": final_state.get("active_documents", []),
                 "actions_taken": final_state.get("actions_taken", []),
-                "summary": final_state.get("conversation_summary", [])
+                "summary": final_state.get("conversation_summary", ""),
+                "llm_provider": self.llm_provider,
             }
+
         except Exception as e:
             return {
                 "success": False,
                 "error": str(e),
-                "response": None
+                "response": None,
             }
