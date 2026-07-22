@@ -47,10 +47,10 @@ pip install -r requirements.txt
 ### Environment Setup
 
 ```bash
-cp .env.example .env
+cp starter/.env.example starter/.env
 ```
 
-Open `.env` and fill in your keys:
+Open `starter/.env` and fill in your keys:
 
 ```
 GEMINI_API_KEY="your_gemini_key_here"

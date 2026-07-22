@@ -12,7 +12,7 @@ python -m venv venv
 venv\Scripts\activate        # Windows
 # source venv/bin/activate   # Mac / Linux
 pip install -r requirements.txt
-cp .env.example .env         # then fill in your API keys
+cp .env.example .env         # fill in your API keys in .env
 streamlit run app.py
 ```
 
